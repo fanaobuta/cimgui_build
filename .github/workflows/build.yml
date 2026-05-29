@@ -1,77 +1,109 @@
 name: Build
 
 on:
-  push: {}
-  pull_request: {}
-  schedule:
-    - cron:  '0 9 * * 1'
+  push:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macOS-latest, windows-latest]
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
 
     steps:
-    - uses: actions/checkout@v1
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Install Dependencies
-      shell: bash
-      env:
-        GITHUB_OS: ${{ matrix.os }}
-      run: |
-        if [ "$GITHUB_OS" == "macOS-latest" ];
-        then
+      - name: Install LuaJIT (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luajit libluajit-5.1-dev
+
+      - name: Install LuaJIT (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
           brew install luajit
-        elif [ "$GITHUB_OS" == "ubuntu-latest" ];
-        then
-          sudo apt-get install -y luajit
-        elif [ "$GITHUB_OS" == "windows-latest" ];
-        then
+
+      - name: Install LuaJIT (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
           vcpkg install luajit:x64-windows
-          echo "/C/vcpkg/installed/x64-windows/tools/luajit" >> $GITHUB_PATH
-          echo "/C/vcpkg/installed/x64-windows/bin"   >> $GITHUB_PATH
-        fi
+          echo "C:/vcpkg/installed/x64-windows/tools/luajit" >> $env:GITHUB_PATH
+          echo "C:/vcpkg/installed/x64-windows/bin" >> $env:GITHUB_PATH
 
-    - name: Download Submodules
-      run: |
-        git submodule update --init --recursive
-      if: github.event_name != 'schedule'
+      - name: Download Submodules
+        run: |
+          git submodule update --init --recursive
 
-    - name: Download Latest ImGui
-      shell: bash
-      run: |
-        rm -rf imgui
-        git clone https://github.com/ocornut/imgui.git
-      if: github.event_name == 'schedule'
+      - name: Generate Bindings
+        shell: bash
+        run: |
+          cd generator
+          bash ./generator.sh
 
-    - name: Generate Bindings
-      shell: bash
-      run: |
-        cd ./generator
-        bash ./generator.sh
+      - name: Configure CMake
+        run: |
+          cmake -B cmake-build -DCMAKE_BUILD_TYPE=Release -DCIMGUI_TEST=1
 
-    - name: CMake
-      run: |
-        mkdir cmake-build
-        cd cmake-build
-        cmake -DCIMGUI_TEST=1 ..
+      - name: Build
+        run: |
+          cmake --build cmake-build --config Release
 
-    - name: Build
-      working-directory: cmake-build
-      run: |
-        cmake --build .
+      - name: List Build Files
+        shell: bash
+        run: |
+          find cmake-build
 
-    - name: Test
-      shell: bash
-      env:
-        GITHUB_OS: ${{ matrix.os }}
-      working-directory: cmake-build
-      run: |
-        if [ "$GITHUB_OS" == "windows-latest" ];
-        then
-          ./Debug/cimgui_test.exe
-        else
-          ./cimgui_test
-        fi
+      - name: Run Tests (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          ./cmake-build/Release/cimgui_test.exe
+
+      - name: Run Tests (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          ./cmake-build/cimgui_test
+
+      # ================= WINDOWS =================
+
+      - name: Upload Windows Build
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cimgui-windows
+          path: |
+            cmake-build/Release/*.dll
+            cmake-build/Release/*.exe
+            cmake-build/Release/*.lib
+
+      # ================= LINUX =================
+
+      - name: Upload Linux Build
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cimgui-linux
+          path: |
+            cmake-build/*.so
+            cmake-build/*.a
+
+      # ================= MACOS =================
+
+      - name: Upload macOS Build
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cimgui-macos
+          path: |
+            cmake-build/*.dylib
+            cmake-build/*.a
+
